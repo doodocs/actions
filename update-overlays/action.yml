@@ -23,6 +23,7 @@ runs:
         fetch-depth: 1
 
     - name: Install Kustomize and jq
+      shell: bash
       env:
         KUSTOMIZE_VERSION: "5.3.0"
       run: |
@@ -37,6 +38,7 @@ runs:
         fi
 
     - name: Update all overlays
+      shell: bash
       run: |
         echo '${{ inputs.OVERLAYS }}' | jq -r '.[]' | while read -r overlay; do
           echo "Updating overlay: ${overlay}"
@@ -46,6 +48,7 @@ runs:
         done
 
     - name: Commit files
+      shell: bash
       id: commit
       run: |
         # exit immediately if any command fails (non-zero exit code)
