@@ -83,6 +83,6 @@ runs:
         tags: ${{ inputs.DOCKER_IMAGE }}
         cache-from: ${{ inputs.CACHE_FROM }}
         cache-to: ${{ inputs.CACHE_TO }}
-        build-args: ${{ input.BUILD_ARGS }}
+        build-args: ${{ inputs.BUILD_ARGS }}
         push: true
         provenance: false
