@@ -1,0 +1,75 @@
+inputs:
+  CHECKOUT_REPOSITORY:
+    required: true
+  CHECKOUT_TOKEN:
+    required: true
+  OVERLAYS:
+    description: |
+      Paths to the overlays as a JSON array string
+      (e.g. ["overlays/dev","overlays/staging","overlays/prod"])'
+    required: true
+  KUSTOMIZE_IMAGE:
+    required: true
+  DOCKER_IMAGE:
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v5
+      with:
+        repository: ${{ inputs.CHECKOUT_REPOSITORY }}
+        token: ${{ inputs.CHECKOUT_TOKEN }}
+        fetch-depth: 1
+
+    - name: Install Kustomize and jq
+      env:
+        KUSTOMIZE_VERSION: "5.3.0"
+      run: |
+        # Install Kustomize
+        curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | tar xz
+        chmod +x kustomize
+        sudo mv kustomize /usr/local/bin/
+        
+        # Install jq (if not already installed)
+        if ! command -v jq &> /dev/null; then
+          sudo apt-get update && sudo apt-get install -y jq
+        fi
+
+    - name: Update all overlays
+      run: |
+        echo '${{ inputs.OVERLAYS }}' | jq -r '.[]' | while read -r overlay; do
+          echo "Updating overlay: ${overlay}"
+          cd "${overlay}"
+          kustomize edit set image ${{ inputs.KUSTOMIZE_IMAGE }}=${{ inputs.DOCKER_IMAGE }}
+          cd - > /dev/null
+        done
+
+    - name: Commit files
+      id: commit
+      run: |
+        # exit immediately if any command fails (non-zero exit code)
+        set -e
+
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+
+        # stage all changes in the working directory
+        git add -A
+
+        # If nothing changed, say so and exit successfully
+        if [ -z "$(git status --porcelain)" ]; then
+          echo "No changes"
+          echo "committed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        git commit -m "chore: update ${{ inputs.KUSTOMIZE_IMAGE }} image to ${{ inputs.DOCKER_IMAGE }} in all overlays"
+        echo "committed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Push changes
+      if: steps.commit.outputs.committed == 'true'
+      uses: ad-m/github-push-action@master
+      with:
+        repository: ${{ inputs.CHECKOUT_REPOSITORY }}
+        github_token: ${{ inputs.CHECKOUT_TOKEN }}
