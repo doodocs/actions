@@ -41,6 +41,7 @@ runs:
   steps:
     - uses: actions/checkout@v5
       with:
+        clean: true
         fetch-depth: 1
         submodules: ${{ inputs.CHECKOUT_SUBMODULES }}
         token: ${{ inputs.CHECKOUT_TOKEN }}
