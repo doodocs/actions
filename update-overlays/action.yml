@@ -20,6 +20,7 @@ runs:
       with:
         repository: ${{ inputs.CHECKOUT_REPOSITORY }}
         token: ${{ inputs.CHECKOUT_TOKEN }}
+        clean: true
         fetch-depth: 1
 
     - name: Install Kustomize and jq
