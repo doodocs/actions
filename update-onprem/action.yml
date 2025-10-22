@@ -1,0 +1,69 @@
+inputs:
+  CHECKOUT_REPOSITORY:
+    required: true
+  CHECKOUT_TOKEN:
+    required: true
+  COMPOSE_FILE:
+    description: Path to compose file
+    required: true
+  YAML_PATH:
+    description: Yaml path to update (e.g., .services.kedo.image)
+    required: true
+  DOCKER_IMAGE:
+    description: Docker image to set
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v5
+      with:
+        repository: ${{ inputs.CHECKOUT_REPOSITORY }}
+        token: ${{ inputs.CHECKOUT_TOKEN }}
+        fetch-depth: 1
+
+    - name: Install yq
+      shell: bash
+      env:
+        YQ_VERSION: "4.48.1"
+      run: |
+        # Install yq
+        curl -sL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" -o yq
+        chmod +x yq
+        sudo mv yq /usr/local/bin/
+
+    - name: Update compose file
+      shell: bash
+      run: |
+        echo "Updating ${{ inputs.COMPOSE_FILE }} at path ${{ inputs.YAML_PATH }} with image ${{ inputs.DOCKER_IMAGE }}"
+        yq eval '${{ inputs.YAML_PATH }} = "${{ inputs.DOCKER_IMAGE }}"' -i ${{ inputs.COMPOSE_FILE }}
+
+    - name: Commit files
+      shell: bash
+      id: commit
+      run: |
+        # exit immediately if any command fails (non-zero exit code)
+        set -e
+
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+
+        # stage all changes in the working directory
+        git add -A
+
+        # If nothing changed, say so and exit successfully
+        if [ -z "$(git status --porcelain)" ]; then
+          echo "No changes"
+          echo "committed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        git commit -m "chore: update ${{ inputs.YAML_PATH }} to ${{ inputs.DOCKER_IMAGE }} in ${{ inputs.COMPOSE_FILE }}"
+        echo "committed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Push changes
+      if: steps.commit.outputs.committed == 'true'
+      uses: ad-m/github-push-action@master
+      with:
+        repository: ${{ inputs.CHECKOUT_REPOSITORY }}
+        github_token: ${{ inputs.CHECKOUT_TOKEN }}
