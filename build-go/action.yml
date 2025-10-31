@@ -56,7 +56,9 @@ runs:
         path: |
           go-build-cache
           go-mod-cache
+          npm-cache
         key: ${{ inputs.GO_CACHE_KEY }}
+        restore-keys: ${{ inputs.GO_CACHE_KEY }}
 
     - name: Inject caches into Docker
       uses: reproducible-containers/buildkit-cache-dance@v3.3.0
@@ -65,7 +67,8 @@ runs:
         cache-map: |
           {
             "go-build-cache": "/root/.cache/go-build",
-            "go-mod-cache": "/go/pkg/mod"
+            "go-mod-cache": "/go/pkg/mod",
+            "npm-cache": "/root/.npm"
           }
         skip-extraction: ${{ steps.cache-go.outputs.cache-hit }}
 
@@ -77,7 +80,7 @@ runs:
         password: ${{ inputs.DOCKER_PASSWORD }}
 
     - name: Build and Push Docker Image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: ${{ inputs.DOCKER_CONTEXT }}
         file: ${{ inputs.DOCKER_FILE }}
