@@ -17,6 +17,10 @@ inputs:
   # Go caching
   GO_CACHE_KEY:
     required: true
+  GO_CACHE_RESTORE_KEYS:
+    description: Optional restore-key prefixes. Defaults to GO_CACHE_KEY for backward compatibility.
+    required: false
+    default: ""
 
   # Build
   DOCKER_CONTEXT:
@@ -58,7 +62,7 @@ runs:
           go-mod-cache
           npm-cache
         key: ${{ inputs.GO_CACHE_KEY }}
-        restore-keys: ${{ inputs.GO_CACHE_KEY }}
+        restore-keys: ${{ inputs.GO_CACHE_RESTORE_KEYS || inputs.GO_CACHE_KEY }}
 
     - name: Inject caches into Docker
       uses: reproducible-containers/buildkit-cache-dance@v3.3.0
