@@ -89,8 +89,9 @@ runs:
         if ! [[ "$NEW_TAG" =~ $TAG_PATTERN ]]; then
           echo "::error::NEW_TAG '$NEW_TAG' does not match TAG_PATTERN '$TAG_PATTERN'"; exit 1
         fi
-        if ! [[ "$YAML_PATH" =~ ^\.[A-Za-z0-9_.\[\]-]+$ ]]; then
-          echo "::error::YAML_PATH '$YAML_PATH' looks unsafe"; exit 1
+        path_re='^(\.[A-Za-z0-9_-]+(\[[0-9]+\])*)+$'
+        if ! [[ "$YAML_PATH" =~ $path_re ]]; then
+          echo "::error::YAML_PATH '$YAML_PATH' looks unsafe (expected e.g. .image.tag or .images[0].newTag)"; exit 1
         fi
         case "$FILE" in /*|*..*) echo "::error::FILE must be a relative path without '..'"; exit 1;; esac
         if [ -z "$TOKEN" ] && [ -z "$SSH_KEY" ]; then echo "::error::Provide TOKEN or SSH_KEY"; exit 1; fi
