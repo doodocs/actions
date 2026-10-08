@@ -14,7 +14,7 @@ argocd-image-updater used to, but driven by CI and with guard rails:
 - uses: doodocs/actions/release-gitops-tag@main
   with:
     REPOSITORY: doodocs/yc-apps
-    TOKEN: ${{ secrets.GITOPS_TOKEN }}        # contents:write on the GitOps repo
+    SSH_KEY: ${{ secrets.GITOPS_SSH_KEY }}    # write deploy key of the GitOps repo (or TOKEN: a PAT with contents:write)
     FILE: doodocs-kedo/values-prod.yaml
     YAML_PATH: .image.tag
     NEW_TAG: ${{ needs.prepare.outputs.version }}

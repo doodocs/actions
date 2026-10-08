@@ -9,8 +9,13 @@ inputs:
     description: GitOps repository, e.g. doodocs/yc-apps
     required: true
   TOKEN:
-    description: Token with contents:write on REPOSITORY
-    required: true
+    description: Token with contents:write on REPOSITORY (use this or SSH_KEY)
+    required: false
+    default: ""
+  SSH_KEY:
+    description: Private deploy key with write access to REPOSITORY (use this or TOKEN)
+    required: false
+    default: ""
   REF:
     description: Branch to update
     required: false
@@ -77,6 +82,8 @@ runs:
         TAG_PATTERN: ${{ inputs.TAG_PATTERN }}
         YAML_PATH: ${{ inputs.YAML_PATH }}
         FILE: ${{ inputs.FILE }}
+        TOKEN: ${{ inputs.TOKEN }}
+        SSH_KEY: ${{ inputs.SSH_KEY }}
       run: |
         set -euo pipefail
         if ! [[ "$NEW_TAG" =~ $TAG_PATTERN ]]; then
@@ -86,6 +93,7 @@ runs:
           echo "::error::YAML_PATH '$YAML_PATH' looks unsafe"; exit 1
         fi
         case "$FILE" in /*|*..*) echo "::error::FILE must be a relative path without '..'"; exit 1;; esac
+        if [ -z "$TOKEN" ] && [ -z "$SSH_KEY" ]; then echo "::error::Provide TOKEN or SSH_KEY"; exit 1; fi
 
     - name: Verify the image exists in the registry
       if: inputs.IMAGE != ''
@@ -105,12 +113,24 @@ runs:
         fi
         echo "Image $IMAGE exists"
 
-    - name: Checkout GitOps repository
+    - name: Checkout GitOps repository (token)
+      if: inputs.TOKEN != ''
       uses: actions/checkout@v5
       with:
         repository: ${{ inputs.REPOSITORY }}
         ref: ${{ inputs.REF }}
         token: ${{ inputs.TOKEN }}
+        path: gitops
+        fetch-depth: 1
+        persist-credentials: true
+
+    - name: Checkout GitOps repository (deploy key)
+      if: inputs.TOKEN == ''
+      uses: actions/checkout@v5
+      with:
+        repository: ${{ inputs.REPOSITORY }}
+        ref: ${{ inputs.REF }}
+        ssh-key: ${{ inputs.SSH_KEY }}
         path: gitops
         fetch-depth: 1
         persist-credentials: true
