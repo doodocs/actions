@@ -1,0 +1,263 @@
+name: Release GitOps tag
+description: >-
+  Writes a new image tag into a GitOps repository (Helm values or kustomization)
+  with an anti-downgrade guard, an optional registry existence check and a
+  rebase-retry push. Replaces argocd-image-updater write-back for production.
+
+inputs:
+  REPOSITORY:
+    description: GitOps repository, e.g. doodocs/yc-apps
+    required: true
+  TOKEN:
+    description: Token with contents:write on REPOSITORY (use this or SSH_KEY)
+    required: false
+    default: ""
+  SSH_KEY:
+    description: Private deploy key with write access to REPOSITORY (use this or TOKEN)
+    required: false
+    default: ""
+  REF:
+    description: Branch to update
+    required: false
+    default: main
+  FILE:
+    description: File inside REPOSITORY to edit, e.g. doodocs-kedo/values-prod.yaml
+    required: true
+  YAML_PATH:
+    description: yq path of the tag, e.g. .image.tag or .images[0].newTag
+    required: true
+  NEW_TAG:
+    description: Tag to write, e.g. 0.45.100
+    required: true
+  TAG_PATTERN:
+    description: Regex NEW_TAG must match (default stable semver)
+    required: false
+    default: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+  ALLOW_DOWNGRADE:
+    description: Set to "true" to permit writing a tag lower than the current one (rollbacks)
+    required: false
+    default: "false"
+  ORDERED:
+    description: >-
+      Set to "false" for tag namespaces that have no version order (e.g. stand-5-<sha8>):
+      NEW_TAG must still match TAG_PATTERN, but no older/newer comparison is made.
+    required: false
+    default: "true"
+  IMAGE:
+    description: Full image reference (repo:tag) to verify in the registry before writing; empty skips the check
+    required: false
+    default: ""
+  REGISTRY_USERNAME:
+    description: Registry login for the IMAGE check (e.g. json_key)
+    required: false
+    default: ""
+  REGISTRY_PASSWORD:
+    description: Registry password for the IMAGE check
+    required: false
+    default: ""
+  DRY_RUN:
+    description: Set to "true" to print the diff without committing
+    required: false
+    default: "false"
+  COMMIT_PREFIX:
+    description: Prefix for the commit subject
+    required: false
+    default: "release"
+
+outputs:
+  committed:
+    description: Set to "true" when a commit was pushed
+    value: ${{ steps.commit.outputs.committed }}
+  old_tag:
+    description: Tag found in FILE before the change
+    value: ${{ steps.guard.outputs.old_tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        NEW_TAG: ${{ inputs.NEW_TAG }}
+        TAG_PATTERN: ${{ inputs.TAG_PATTERN }}
+        YAML_PATH: ${{ inputs.YAML_PATH }}
+        FILE: ${{ inputs.FILE }}
+        TOKEN: ${{ inputs.TOKEN }}
+        SSH_KEY: ${{ inputs.SSH_KEY }}
+      run: |
+        set -euo pipefail
+        if ! [[ "$NEW_TAG" =~ $TAG_PATTERN ]]; then
+          echo "::error::NEW_TAG '$NEW_TAG' does not match TAG_PATTERN '$TAG_PATTERN'"; exit 1
+        fi
+        if ! [[ "$YAML_PATH" =~ ^\.[A-Za-z0-9_.\[\]-]+$ ]]; then
+          echo "::error::YAML_PATH '$YAML_PATH' looks unsafe"; exit 1
+        fi
+        case "$FILE" in /*|*..*) echo "::error::FILE must be a relative path without '..'"; exit 1;; esac
+        if [ -z "$TOKEN" ] && [ -z "$SSH_KEY" ]; then echo "::error::Provide TOKEN or SSH_KEY"; exit 1; fi
+
+    - name: Verify the image exists in the registry
+      if: inputs.IMAGE != ''
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.IMAGE }}
+        REGISTRY_USERNAME: ${{ inputs.REGISTRY_USERNAME }}
+        REGISTRY_PASSWORD: ${{ inputs.REGISTRY_PASSWORD }}
+      run: |
+        set -euo pipefail
+        registry="${IMAGE%%/*}"
+        if [ -n "$REGISTRY_USERNAME" ]; then
+          printf '%s' "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USERNAME" --password-stdin "$registry" >/dev/null
+        fi
+        if ! docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+          echo "::error::Image $IMAGE is not in the registry; refusing to point production at a missing tag"; exit 1
+        fi
+        echo "Image $IMAGE exists"
+
+    - name: Checkout GitOps repository (token)
+      if: inputs.TOKEN != ''
+      uses: actions/checkout@v5
+      with:
+        repository: ${{ inputs.REPOSITORY }}
+        ref: ${{ inputs.REF }}
+        token: ${{ inputs.TOKEN }}
+        path: gitops
+        fetch-depth: 1
+        persist-credentials: true
+
+    - name: Checkout GitOps repository (deploy key)
+      if: inputs.TOKEN == ''
+      uses: actions/checkout@v5
+      with:
+        repository: ${{ inputs.REPOSITORY }}
+        ref: ${{ inputs.REF }}
+        ssh-key: ${{ inputs.SSH_KEY }}
+        path: gitops
+        fetch-depth: 1
+        persist-credentials: true
+
+    - name: Install yq
+      shell: bash
+      env:
+        YQ_VERSION: "4.48.1"
+      run: |
+        set -euo pipefail
+        if ! command -v yq >/dev/null 2>&1 || ! yq --version | grep -q "v${YQ_VERSION}"; then
+          curl -sSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" -o /tmp/yq
+          chmod +x /tmp/yq && sudo mv /tmp/yq /usr/local/bin/yq
+        fi
+
+    - name: Anti-downgrade guard
+      id: guard
+      shell: bash
+      working-directory: gitops
+      env:
+        FILE: ${{ inputs.FILE }}
+        YAML_PATH: ${{ inputs.YAML_PATH }}
+        NEW_TAG: ${{ inputs.NEW_TAG }}
+        TAG_PATTERN: ${{ inputs.TAG_PATTERN }}
+        ALLOW_DOWNGRADE: ${{ inputs.ALLOW_DOWNGRADE }}
+        ORDERED: ${{ inputs.ORDERED }}
+      run: |
+        set -euo pipefail
+        test -f "$FILE" || { echo "::error::$FILE not found in gitops repo"; exit 1; }
+        old="$(yq -r "$YAML_PATH" "$FILE")"
+        if [ -z "$old" ] || [ "$old" = "null" ]; then
+          echo "::error::$YAML_PATH is empty in $FILE; refusing to write to an unknown location"; exit 1
+        fi
+        echo "old_tag=$old" >> "$GITHUB_OUTPUT"
+        if [ "$old" = "$NEW_TAG" ]; then
+          echo "unchanged=true" >> "$GITHUB_OUTPUT"
+          echo "$FILE already has $YAML_PATH = $NEW_TAG; nothing to do"; exit 0
+        fi
+        echo "unchanged=false" >> "$GITHUB_OUTPUT"
+        if [ "$ORDERED" != "true" ]; then
+          echo "ORDERED=false: no version comparison for $YAML_PATH ($old -> $NEW_TAG)"; exit 0
+        fi
+        if ! [[ "$old" =~ $TAG_PATTERN ]] && [ "$ALLOW_DOWNGRADE" != "true" ]; then
+          echo "::error::Current value '$old' in $FILE ($YAML_PATH) does not match TAG_PATTERN, so it cannot be compared with $NEW_TAG. Set ALLOW_DOWNGRADE=true to overwrite it deliberately."; exit 1
+        fi
+        # Highest of the two by version sort must be the new one, otherwise it is a downgrade.
+        highest="$(printf '%s\n%s\n' "$old" "$NEW_TAG" | sort -V | tail -n1)"
+        if [ "$highest" != "$NEW_TAG" ]; then
+          if [ "$ALLOW_DOWNGRADE" = "true" ]; then
+            echo "::warning::Downgrade $old -> $NEW_TAG allowed explicitly (ALLOW_DOWNGRADE=true)"
+          else
+            echo "::error::Refusing downgrade $old -> $NEW_TAG in $FILE ($YAML_PATH). Set ALLOW_DOWNGRADE=true for an intentional rollback."; exit 1
+          fi
+        fi
+        echo "Will update $FILE $YAML_PATH: $old -> $NEW_TAG"
+
+    - name: Write the tag
+      if: steps.guard.outputs.unchanged != 'true'
+      shell: bash
+      working-directory: gitops
+      env:
+        FILE: ${{ inputs.FILE }}
+        YAML_PATH: ${{ inputs.YAML_PATH }}
+        NEW_TAG: ${{ inputs.NEW_TAG }}
+        OLD_TAG: ${{ steps.guard.outputs.old_tag }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # Line-exact replacement: yq -i would re-indent lists, so the file is edited on the
+        # single line that holds YAML_PATH and everything else stays byte-for-byte the same.
+        python3 "$ACTION_PATH/write_tag.py" "$FILE" "$YAML_PATH" "$OLD_TAG" "$NEW_TAG"
+        got="$(yq -r "$YAML_PATH" "$FILE")"
+        if [ "$got" != "$NEW_TAG" ]; then
+          echo "::error::post-write check failed: $YAML_PATH is '$got', expected '$NEW_TAG'"; exit 1
+        fi
+        git --no-pager diff -- "$FILE"
+        changed="$(git diff --numstat -- "$FILE" | awk '{print $1+$2}')"
+        if [ "${changed:-0}" -ne 2 ]; then
+          echo "::error::Expected exactly one changed line in $FILE, got numstat '$changed'; aborting"; exit 1
+        fi
+
+    - name: Commit and push
+      id: commit
+      if: steps.guard.outputs.unchanged != 'true'
+      shell: bash
+      working-directory: gitops
+      env:
+        FILE: ${{ inputs.FILE }}
+        YAML_PATH: ${{ inputs.YAML_PATH }}
+        NEW_TAG: ${{ inputs.NEW_TAG }}
+        OLD_TAG: ${{ steps.guard.outputs.old_tag }}
+        REF: ${{ inputs.REF }}
+        DRY_RUN: ${{ inputs.DRY_RUN }}
+        COMMIT_PREFIX: ${{ inputs.COMMIT_PREFIX }}
+        ORDERED: ${{ inputs.ORDERED }}
+        SOURCE: ${{ github.repository }}@${{ github.sha }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "DRY_RUN=true: not committing. Would change $FILE $YAML_PATH $OLD_TAG -> $NEW_TAG"
+          echo "committed=false" >> "$GITHUB_OUTPUT"; exit 0
+        fi
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add -- "$FILE"
+        app="$(dirname "$FILE")"
+        git commit -q -m "${COMMIT_PREFIX}(${app}): ${OLD_TAG} -> ${NEW_TAG}" \
+          -m "Source: ${SOURCE}" -m "Run: ${RUN_URL}" -m "Actor: ${ACTOR}"
+        for attempt in 1 2 3 4 5; do
+          if git push origin "HEAD:${REF}"; then
+            echo "committed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "push rejected (attempt $attempt), rebasing on origin/${REF}"
+          git fetch origin "$REF"
+          git rebase "origin/${REF}" || { git rebase --abort; echo "::error::rebase failed"; exit 1; }
+          # Re-check the guard after rebase: someone may have moved the tag meanwhile.
+          current="$(git show "origin/${REF}:${FILE}" | yq -r "$YAML_PATH")"
+          highest="$(printf '%s\n%s\n' "$current" "$NEW_TAG" | sort -V | tail -n1)"
+          if [ "$ORDERED" = "true" ] && [ "$current" != "$OLD_TAG" ] && [ "$highest" != "$NEW_TAG" ]; then
+            echo "::error::${REF} now has $current which is newer than $NEW_TAG; aborting"; exit 1
+          fi
+          if git diff --quiet "origin/${REF}" HEAD -- "$FILE"; then
+            echo "${REF} already contains this change; nothing to push"
+            echo "committed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          sleep $((attempt * 3))
+        done
+        echo "::error::could not push after 5 attempts"; exit 1
