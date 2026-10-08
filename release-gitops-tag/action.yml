@@ -32,6 +32,12 @@ inputs:
     description: Set to "true" to permit writing a tag lower than the current one (rollbacks)
     required: false
     default: "false"
+  ORDERED:
+    description: >-
+      Set to "false" for tag namespaces that have no version order (e.g. stand-5-<sha8>):
+      NEW_TAG must still match TAG_PATTERN, but no older/newer comparison is made.
+    required: false
+    default: "true"
   IMAGE:
     description: Full image reference (repo:tag) to verify in the registry before writing; empty skips the check
     required: false
@@ -130,6 +136,7 @@ runs:
         NEW_TAG: ${{ inputs.NEW_TAG }}
         TAG_PATTERN: ${{ inputs.TAG_PATTERN }}
         ALLOW_DOWNGRADE: ${{ inputs.ALLOW_DOWNGRADE }}
+        ORDERED: ${{ inputs.ORDERED }}
       run: |
         set -euo pipefail
         test -f "$FILE" || { echo "::error::$FILE not found in gitops repo"; exit 1; }
@@ -143,6 +150,9 @@ runs:
           echo "$FILE already has $YAML_PATH = $NEW_TAG; nothing to do"; exit 0
         fi
         echo "unchanged=false" >> "$GITHUB_OUTPUT"
+        if [ "$ORDERED" != "true" ]; then
+          echo "ORDERED=false: no version comparison for $YAML_PATH ($old -> $NEW_TAG)"; exit 0
+        fi
         if ! [[ "$old" =~ $TAG_PATTERN ]] && [ "$ALLOW_DOWNGRADE" != "true" ]; then
           echo "::error::Current value '$old' in $FILE ($YAML_PATH) does not match TAG_PATTERN, so it cannot be compared with $NEW_TAG. Set ALLOW_DOWNGRADE=true to overwrite it deliberately."; exit 1
         fi
@@ -195,6 +205,7 @@ runs:
         REF: ${{ inputs.REF }}
         DRY_RUN: ${{ inputs.DRY_RUN }}
         COMMIT_PREFIX: ${{ inputs.COMMIT_PREFIX }}
+        ORDERED: ${{ inputs.ORDERED }}
         SOURCE: ${{ github.repository }}@${{ github.sha }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         ACTOR: ${{ github.actor }}
@@ -220,7 +231,7 @@ runs:
           # Re-check the guard after rebase: someone may have moved the tag meanwhile.
           current="$(git show "origin/${REF}:${FILE}" | yq -r "$YAML_PATH")"
           highest="$(printf '%s\n%s\n' "$current" "$NEW_TAG" | sort -V | tail -n1)"
-          if [ "$current" != "$OLD_TAG" ] && [ "$highest" != "$NEW_TAG" ]; then
+          if [ "$ORDERED" = "true" ] && [ "$current" != "$OLD_TAG" ] && [ "$highest" != "$NEW_TAG" ]; then
             echo "::error::${REF} now has $current which is newer than $NEW_TAG; aborting"; exit 1
           fi
           if git diff --quiet "origin/${REF}" HEAD -- "$FILE"; then

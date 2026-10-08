@@ -3,7 +3,7 @@
 Writes a new image tag into a GitOps repository (Helm values or a kustomization) the way
 argocd-image-updater used to, but driven by CI and with guard rails:
 
-- refuses to write a tag lower than the current one (`sort -V`), unless `ALLOW_DOWNGRADE: "true"`;
+- refuses to write a tag lower than the current one (`sort -V`), unless `ALLOW_DOWNGRADE: "true"`; `ORDERED: "false"` for unordered tag namespaces (stand-N-<sha8>);
 - optionally verifies the image tag exists in the registry before writing (`IMAGE` + registry creds);
 - edits exactly one line of the file (quotes, comments and list indentation stay untouched) and aborts otherwise;
 - commits as `github-actions[bot]` with the source repo, SHA, run URL and actor in the message;
