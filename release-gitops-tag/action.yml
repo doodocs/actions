@@ -128,6 +128,7 @@ runs:
         FILE: ${{ inputs.FILE }}
         YAML_PATH: ${{ inputs.YAML_PATH }}
         NEW_TAG: ${{ inputs.NEW_TAG }}
+        TAG_PATTERN: ${{ inputs.TAG_PATTERN }}
         ALLOW_DOWNGRADE: ${{ inputs.ALLOW_DOWNGRADE }}
       run: |
         set -euo pipefail
@@ -142,6 +143,9 @@ runs:
           echo "$FILE already has $YAML_PATH = $NEW_TAG; nothing to do"; exit 0
         fi
         echo "unchanged=false" >> "$GITHUB_OUTPUT"
+        if ! [[ "$old" =~ $TAG_PATTERN ]] && [ "$ALLOW_DOWNGRADE" != "true" ]; then
+          echo "::error::Current value '$old' in $FILE ($YAML_PATH) does not match TAG_PATTERN, so it cannot be compared with $NEW_TAG. Set ALLOW_DOWNGRADE=true to overwrite it deliberately."; exit 1
+        fi
         # Highest of the two by version sort must be the new one, otherwise it is a downgrade.
         highest="$(printf '%s\n%s\n' "$old" "$NEW_TAG" | sort -V | tail -n1)"
         if [ "$highest" != "$NEW_TAG" ]; then
@@ -218,6 +222,10 @@ runs:
           highest="$(printf '%s\n%s\n' "$current" "$NEW_TAG" | sort -V | tail -n1)"
           if [ "$current" != "$OLD_TAG" ] && [ "$highest" != "$NEW_TAG" ]; then
             echo "::error::${REF} now has $current which is newer than $NEW_TAG; aborting"; exit 1
+          fi
+          if git diff --quiet "origin/${REF}" HEAD -- "$FILE"; then
+            echo "${REF} already contains this change; nothing to push"
+            echo "committed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           sleep $((attempt * 3))
         done
