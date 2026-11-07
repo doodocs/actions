@@ -73,7 +73,5 @@ runs:
 
     - name: Push changes
       if: steps.commit.outputs.committed == 'true'
-      uses: ad-m/github-push-action@master
-      with:
-        repository: ${{ inputs.CHECKOUT_REPOSITORY }}
-        github_token: ${{ inputs.CHECKOUT_TOKEN }}
+      shell: bash
+      run: git push origin HEAD
