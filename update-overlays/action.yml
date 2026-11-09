@@ -27,11 +27,20 @@ runs:
       shell: bash
       env:
         KUSTOMIZE_VERSION: "5.3.0"
+        GH_TOKEN: ${{ github.token }}
       run: |
-        # Install Kustomize
-        curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | tar xz
-        chmod +x kustomize
-        sudo mv kustomize /usr/local/bin/
+        set -euo pipefail
+        # Authenticated download via API first: anonymous release downloads get 504 during GitHub incidents.
+        # curl -f makes an HTTP error fail the step instead of passing an HTML page on.
+        ARCHIVE="kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+        if ! { command -v gh >/dev/null 2>&1 && gh release download "kustomize/v${KUSTOMIZE_VERSION}" -R kubernetes-sigs/kustomize -p "${ARCHIVE}" -O "/tmp/${ARCHIVE}" --clobber; }; then
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 20 \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/${ARCHIVE}" -o "/tmp/${ARCHIVE}"
+        fi
+        tar xzf "/tmp/${ARCHIVE}" -C /tmp kustomize
+        chmod +x /tmp/kustomize
+        sudo mv /tmp/kustomize /usr/local/bin/kustomize
+        kustomize version
         
         # Install jq (if not already installed)
         if ! command -v jq &> /dev/null; then
